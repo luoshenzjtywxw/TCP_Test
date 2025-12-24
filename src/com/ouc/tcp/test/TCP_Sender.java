@@ -70,22 +70,19 @@ public class TCP_Sender extends TCP_Sender_ADT {
 
                 if (ack == null) continue;
 
-                // 如果是 NAK (-1) 或损坏包（这里假设损坏包不会入队，或设为 -2）
-                if (ack == -1) {
-                    System.out.println("Received NAK for seq=" + seq + ", retransmitting...");
-                    udt_send(tcpPack);
-                    continue;
-                }
-
                 // 只接受当前期望的 ACK
                 if (ack == seq) {
                     System.out.println("ACK received for seq=" + seq);
                     break; // 成功，退出循环
-                } else {
-                    // 收到的是旧 ACK（比如对上一个包的确认），忽略
-//                    udt_send(tcpPack);
+                } else if (ack == 1-seq){
+                    // 收到的是旧 ACK（比如对上一个包的确认）
                     System.out.println("Ignored old/duplicate ACK: " + ack);
+                    udt_send(tcpPack);
+
                     // 不重传！继续等正确的 ACK
+                }else{
+                    System.out.println("Received unexpected ACK: " + ack);
+                    continue;
                 }
 
             } catch (InterruptedException e) {

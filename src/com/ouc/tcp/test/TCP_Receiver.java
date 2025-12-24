@@ -6,6 +6,7 @@ import java.io.BufferedWriter;
 import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
+import java.net.InetAddress;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 
@@ -27,67 +28,27 @@ public class TCP_Receiver extends TCP_Receiver_ADT {
 	@Override
 	//接收到数据报：检查校验和，设置回复的ACK报文段
 	public void rdt_recv(TCP_PACKET recvPack) {
-
+        int recvSeq = recvPack.getTcpH().getTh_seq();
         // 检查校验和
         if (CheckSum.computeChkSum(recvPack) != recvPack.getTcpH().getTh_sum()) {
-            // 数据包损坏 → 发送 NAK
-            System.out.println("Packet corrupted! Sending NAK.");
-            tcpH.setTh_ack(-1);
-            ackPack = new TCP_PACKET(tcpH, tcpS, recvPack.getSourceAddr());
-            tcpH.setTh_sum(CheckSum.computeChkSum(ackPack));
-
-            //回复ACK报文段
-            reply(ackPack);
+            // ❗ 包损坏 → 不发 NAK，而是重发上一次的 ACK（即 1 - sequence）
+            System.out.println("Packet corrupted! Sending duplicate ACK for seq=" + (1 - sequence));
+            sendAck(1 - sequence, recvPack.getSourceAddr());
             return;
         }
-        int recvSeq = recvPack.getTcpH().getTh_seq();
 
         if (recvSeq == sequence) {
             // 正确且按序
             dataQueue.offer(recvPack.getTcpS().getData());
             System.out.println("Deliver data with seq=" + recvSeq);
-
-            tcpH.setTh_ack(sequence);
-            ackPack = new TCP_PACKET(tcpH, tcpS, recvPack.getSourceAddr());
-            tcpH.setTh_sum(CheckSum.computeChkSum(ackPack));
-            reply(ackPack);
-
-            // 切换期望序号
-            sequence = 1 - sequence;
+            sendAck(sequence, recvPack.getSourceAddr());
+            sequence = 1 - sequence; // 切换期望序号
 
         } else {
             // 重复包（比如重传的旧包）
-            System.out.println("Duplicate packet (seq=" + recvSeq + "), sending ACK for last good seq.");
-            // 发送对上一个包的 ACK（即 1 - expectedSeq）
-            tcpH.setTh_ack(1-sequence);
-            ackPack = new TCP_PACKET(tcpH, tcpS, recvPack.getSourceAddr());
-            tcpH.setTh_sum(CheckSum.computeChkSum(ackPack));
-            reply(ackPack);
-            // 注意：不交付数据！
+            System.out.println("Duplicate packet (seq=" + recvSeq + "), sending duplicate ACK for seq=" + (1 - sequence));
+            sendAck(1 - sequence, recvPack.getSourceAddr());
         }
-
-//		//检查校验码，生成ACK
-//		if(CheckSum.computeChkSum(recvPack) == recvPack.getTcpH().getTh_sum()) {
-//			//生成ACK报文段（设置确认号）
-//			tcpH.setTh_ack(recvPack.getTcpH().getTh_seq());
-//			ackPack = new TCP_PACKET(tcpH, tcpS, recvPack.getSourceAddr());
-//			tcpH.setTh_sum(CheckSum.computeChkSum(ackPack));
-//			//回复ACK报文段
-//			reply(ackPack);
-//
-//			//将接收到的正确有序的数据插入data队列，准备交付
-//			dataQueue.add(recvPack.getTcpS().getData());
-//			sequence++;
-//		}else{
-//			System.out.println("Recieve Computed: "+CheckSum.computeChkSum(recvPack));
-//			System.out.println("Recieved Packet"+recvPack.getTcpH().getTh_sum());
-//			System.out.println("Problem: Packet Number: "+recvPack.getTcpH().getTh_seq()+" + InnerSeq:  "+sequence);
-//			tcpH.setTh_ack(-1);
-//			ackPack = new TCP_PACKET(tcpH, tcpS, recvPack.getSourceAddr());
-//			tcpH.setTh_sum(CheckSum.computeChkSum(ackPack));
-//			//回复ACK报文段
-//			reply(ackPack);
-//		}
 
 		System.out.println();
 		
@@ -134,5 +95,11 @@ public class TCP_Receiver extends TCP_Receiver_ADT {
 		//发送数据报
 		client.send(replyPack);
 	}
-	
+    // 辅助方法：发送 ACK
+    private void sendAck(int ackNum, InetAddress destAddr) {
+        tcpH.setTh_ack(ackNum);
+        TCP_PACKET ackPack = new TCP_PACKET(tcpH, tcpS, destAddr);
+        tcpH.setTh_sum(CheckSum.computeChkSum(ackPack));
+        reply(ackPack);
+    }
 }
