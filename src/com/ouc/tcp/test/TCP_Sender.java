@@ -80,9 +80,6 @@ public class TCP_Sender extends TCP_Sender_ADT {
                     udt_send(tcpPack);
 
                     // 不重传！继续等正确的 ACK
-                }else{
-                    System.out.println("Received unexpected ACK: " + ack);
-                    continue;
                 }
 
             } catch (InterruptedException e) {
@@ -95,6 +92,19 @@ public class TCP_Sender extends TCP_Sender_ADT {
 	@Override
 	//接收到ACK报文：检查校验和，将确认号插入ack队列;NACK的确认号为－1；不需要修改
 	public void recv(TCP_PACKET recvPack) {
+        // 先检查 ACK 报文本身的校验和！
+        if (CheckSum.computeChkSum(recvPack) != recvPack.getTcpH().getTh_sum()) {
+            // ACK 报文损坏，直接丢弃（不入队）
+            System.out.println("ACK packet corrupted! Discarded.");
+            return;
+        }
+
+        int ackNum = recvPack.getTcpH().getTh_ack();
+        // 额外安全检查：只接受 0 或 1
+        if (ackNum != 0 && ackNum != 1) {
+            System.out.println("Invalid ACK number: " + ackNum + ", discarded.");
+            return;
+        }
 		System.out.println("Receive ACK Number： "+ recvPack.getTcpH().getTh_ack());
 		ackQueue.add(recvPack.getTcpH().getTh_ack());
 	    System.out.println();	
