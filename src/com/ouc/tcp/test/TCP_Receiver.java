@@ -40,6 +40,7 @@ public class TCP_Receiver extends TCP_Receiver_ADT {
         // 检查校验和
         if (CheckSum.computeChkSum(recvPack) != recvPack.getTcpH().getTh_sum()) {
             System.out.println("Corrupted packet! Sending cumulative ACK anyway.");
+            // 损坏包也要发送累计确认
             sendCumulativeAck(recvPack.getSourceAddr());
             return;
         }
@@ -65,8 +66,8 @@ public class TCP_Receiver extends TCP_Receiver_ADT {
 
             System.out.println("接收者收到在窗口外的包：" + recvSeq);
             System.out.println("目前窗口位置为：("+ ackSeq +"-"+(ackSeq +WINDOW_SIZE)+")");
-            // 仍发送当前累积 ACK
-//            sendCumulativeAck(recvPack.getSourceAddr());
+            // 仍发送当前累积 ACK，这里也要发！
+            sendCumulativeAck(recvPack.getSourceAddr());
         }
 
         System.out.println();

@@ -164,6 +164,7 @@ public class TCP_Sender extends TCP_Sender_ADT {
                 TCP_PACKET lost = sndBuf.get(sendBase);
                 if (lost != null) {
                     udt_send(lost);
+                    System.out.println("快重传了");
                 }
 
                 // Fast Recovery
