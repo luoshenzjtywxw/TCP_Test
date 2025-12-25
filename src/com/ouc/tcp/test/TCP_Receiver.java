@@ -7,131 +7,125 @@ import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.net.InetAddress;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.LinkedBlockingQueue;
 
 import com.ouc.tcp.client.TCP_Receiver_ADT;
 import com.ouc.tcp.message.*;
-import com.ouc.tcp.tool.TCP_TOOL;
 
 public class TCP_Receiver extends TCP_Receiver_ADT {
-    private static final int WINDOW_SIZE = 4;
-    private static final int MAX_SEQ = 100;
+    private static final int WINDOW_SIZE = 500;
 
-    private int expectedSeq = 0; // 期望的下一个按序包
-    // 缓存：记录哪些序号已收到（true/false）
-    private final boolean[] received = new boolean[MAX_SEQ];
-    // 数据缓存
-    private final int[][] dataBuf = new int[MAX_SEQ][];
+    private int ackSeq = 0; // 期望的下一个按序包（自然增长，不取模）
 
+    // 使用 Map 替代固定数组：动态支持任意 seq
+    private final Map<Integer, Boolean> received = new ConcurrentHashMap<>();
+    private final Map<Integer, int[]> dataBuf = new ConcurrentHashMap<>();
+    // 一个线程内访问
     private final BlockingQueue<int[]> dataQueue = new LinkedBlockingQueue<>();
-	/*构造函数*/
-	public TCP_Receiver() {
-		super();	//调用超类构造函数
-		super.initTCP_Receiver(this);	//初始化TCP接收端
-	}
 
-	@Override
-	//接收到数据报：检查校验和，设置回复的ACK报文段
-	public void rdt_recv(TCP_PACKET recvPack) {
+    /*构造函数*/
+    public TCP_Receiver() {
+        super();
+        super.initTCP_Receiver(this);
+    }
+
+    @Override
+    public void rdt_recv(TCP_PACKET recvPack) {
         int recvSeq = recvPack.getTcpH().getTh_seq();
+
         // 检查校验和
-        // 损害了就不管了，等着发送方超时
         if (CheckSum.computeChkSum(recvPack) != recvPack.getTcpH().getTh_sum()) {
-            // 发送最后一个按序确认的 ACK
-//            sendAck((expectedSeq - 1 + MAX_SEQ) % MAX_SEQ, recvPack.getSourceAddr());
+            System.out.println("Corrupted packet! Sending cumulative ACK anyway.");
+            sendCumulativeAck(recvPack.getSourceAddr());
             return;
         }
 
         // 检查是否在接收窗口内 [expectedSeq, expectedSeq + WINDOW_SIZE)
-        if (isInWindow(recvSeq, expectedSeq, WINDOW_SIZE)) {
+        if (isInWindow(recvSeq, ackSeq, WINDOW_SIZE)) {
             // 缓存数据（即使乱序）
-            // 这个好像是如果在窗口内的重复数据，就会覆盖，但没关系
-            dataBuf[recvSeq] = recvPack.getTcpS().getData();
-            // 标记为已收到
-            received[recvSeq] = true;
+            dataBuf.put(recvSeq, recvPack.getTcpS().getData());
+            received.put(recvSeq, true);
 
-            System.out.println("Cached packet with seq=" + recvSeq);
+            System.out.println("收到次序为=" + recvSeq+"的包");
 
-            // 立即发送 ACK（无论是否按序）
-            sendAck(recvSeq, recvPack.getSourceAddr());
-
-            // 尝试交付连续数据
+            // 先 deliver 再发 ACK（确保 ACK 反映最新状态）
+            // 比如收到了序号为5的包，然后发送的是5，期望变成了6，下一次收到序号为6的包，然后发送期望为6的ACK，而不是7，如果没收到序号为6的包，则发送的ACK为6，而不是5，因为代表了期望的包
+            // 接收者收到了这个6，就会接着发送6的包，并代表之前的已经确认了（因为之前没有确认，接收者的期望也不会变成6）
             deliverInOrder();
+
+            sendCumulativeAck(recvPack.getSourceAddr());
+
+
+
         } else {
-            // 包在窗口外，说明接收者收到了，但是发送确认出问题了，那么在确认下，不然发送者会一直重发
-            System.out.println("Out-of-window packet: " + recvSeq);
-            sendAck(recvSeq, recvPack.getSourceAddr()); // 或者发 expectedSeq-1?
+
+            System.out.println("接收者收到在窗口外的包：" + recvSeq);
+            System.out.println("目前窗口位置为：("+ ackSeq +"-"+(ackSeq +WINDOW_SIZE)+")");
+            // 仍发送当前累积 ACK
+//            sendCumulativeAck(recvPack.getSourceAddr());
         }
 
-		System.out.println();
-		
-		
-		//交付数据（每20组数据交付一次）
-		if(dataQueue.size() == 20) 
-			deliver_data();	
-	}
+        System.out.println();
+
+        // 每20组交付一次
+        if (dataQueue.size() == 20)
+            deliver_data();
+    }
+
     private void deliverInOrder() {
-        while (received[expectedSeq]) {
-            // 提交数据
-            dataQueue.offer(dataBuf[expectedSeq]);
-            System.out.println("Delivered in-order data: seq=" + expectedSeq);
+        // 只要 expectedSeq 已收到，就持续交付
 
-            // 清空缓存
-            received[expectedSeq] = false;
-            dataBuf[expectedSeq] = null;
+        while (Boolean.TRUE.equals(received.get(ackSeq))) {
+            int[] data = dataBuf.get(ackSeq);
+            if (data != null) {
+                dataQueue.offer(data);
+//                System.out.println("Delivered in-order data: seq=" + expectedSeq);
+            }
 
-            // 推进期望序号
-            expectedSeq = (expectedSeq + 1) % MAX_SEQ;
+            // 清理缓存（可选，节省内存）
+            received.remove(ackSeq);
+            dataBuf.remove(ackSeq);
+
+            ackSeq++; // 自然递增，不取模！
         }
     }
+
+    // 简化：因为 expectedSeq 不会环绕，直接数值判断
     private boolean isInWindow(int seq, int start, int size) {
-        if (size >= MAX_SEQ) return true;
-        if (start + size <= MAX_SEQ) {
-            return seq >= start && seq < start + size;
-        } else {
-            return seq >= start || seq < (start + size) % MAX_SEQ;
+        return seq >= start && seq < start + size;
+    }
+
+    @Override
+    public void deliver_data() {
+        File fw = new File("recvData.txt");
+        try (BufferedWriter writer = new BufferedWriter(new FileWriter(fw, true))) {
+            while (!dataQueue.isEmpty()) {
+                int[] data = dataQueue.poll();
+                for (int value : data) {
+                    writer.write(value + "\n");
+                }
+                writer.flush();
+            }
+        } catch (IOException e) {
+            e.printStackTrace();
         }
     }
-	@Override
-	//交付数据（将数据写入文件）；不需要修改
-	public void deliver_data() {
-		//检查dataQueue，将数据写入文件
-		File fw = new File("recvData.txt");
-		BufferedWriter writer;
-		
-		try {
-			writer = new BufferedWriter(new FileWriter(fw, true));
-			
-			//循环检查data队列中是否有新交付数据
-			while(!dataQueue.isEmpty()) {
-				int[] data = dataQueue.poll();
-				
-				//将数据写入文件
-				for(int i = 0; i < data.length; i++) {
-					writer.write(data[i] + "\n");
-				}
-				
-				writer.flush();		//清空输出缓存
-			}
-			writer.close();
-		} catch (IOException e) {
-			// TODO Auto-generated catch block
-			e.printStackTrace();
-		}
-	}
 
-	@Override
-	//回复ACK报文段
-	public void reply(TCP_PACKET replyPack) {
-		//设置错误控制标志
-		tcpH.setTh_eflag((byte)7);	//eFlag=0，信道无错误
-				
-		//发送数据报
-		client.send(replyPack);
-	}
-    // 辅助方法：发送 ACK
-    private void sendAck(int ackNum, InetAddress destAddr) {
+    @Override
+    public void reply(TCP_PACKET replyPack) {
+        tcpH.setTh_eflag((byte) 7); // 无错误
+        client.send(replyPack);
+    }
+
+
+    private void sendCumulativeAck(InetAddress destAddr) {
+        int ackNum = ackSeq-1; // TCP 标准：ACK = 下一个期望序号
+        System.out.println("不正常发送确认值为"+ ackNum +"的ACK");
+
         tcpH.setTh_ack(ackNum);
         TCP_PACKET ackPack = new TCP_PACKET(tcpH, tcpS, destAddr);
         tcpH.setTh_sum(CheckSum.computeChkSum(ackPack));
