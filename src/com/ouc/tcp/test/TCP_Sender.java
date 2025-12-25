@@ -1,5 +1,5 @@
 /***************************2.1: ACK/NACK
-**************************** Feng Hong; 2015-12-09*/
+ **************************** Feng Hong; 2015-12-09*/
 
 package com.ouc.tcp.test;
 
@@ -9,137 +9,164 @@ import com.ouc.tcp.client.UDT_Timer;
 import com.ouc.tcp.message.*;
 import com.ouc.tcp.tool.TCP_TOOL;
 
+import java.util.HashMap;
+import java.util.Map;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 
 public class TCP_Sender extends TCP_Sender_ADT {
-	
-	private TCP_PACKET tcpPack;	//待发送的TCP数据报
-	private volatile int seq = 0;
-    private UDT_Timer timer;    // 定时器
-    private UDT_RetransTask reTrans; // 重传任务
+    private static final int WINDOW_SIZE = 4;        // 发送窗口大小
+    private static final int MAX_SEQ = 100;            // 序号范围 0~7
     private final BlockingQueue<Integer> ackQueue = new LinkedBlockingQueue<>();
+    // 缓存已发送但未确认的包
+    private final Map<Integer, TCP_PACKET> sndBuf = new HashMap<>();
+    // 每个序号对应的定时器和重传任务
+    private final Map<Integer, UDT_Timer> timers = new HashMap<>();
+    private final Map<Integer, UDT_RetransTask> retransTasks = new HashMap<>();
+    private int ackNum;
+    private TCP_PACKET tcpPack;    //待发送的TCP数据报
+    private int base = 0;                            // 窗口左边界（最早未确认序号）
+    private int nextseqnum = 0;                      // 下一个要发送的序号
 
-	/*构造函数*/
-	public TCP_Sender() {
-		super();	//调用超类构造函数
-		super.initTCP_Sender(this);		//初始化TCP发送端
-	}
 
-	@Override
-	//可靠发送（应用层调用）：封装应用层数据，产生TCP数据报；需要修改
-	public void rdt_send(int dataIndex, int[] appData) {
-		
-		//生成TCP数据报（设置序号和数据字段/校验和),注意打包的顺序
-		tcpH.setTh_seq(seq);//包序号设置为字节流号：
-		tcpS.setData(appData);
-		tcpPack = new TCP_PACKET(tcpH, tcpS, destinAddr);		
-		//更新带有checksum的TCP 报文头		
-		tcpH.setTh_sum(CheckSum.computeChkSum(tcpPack));
-		tcpPack.setTcpH(tcpH);
-		
-		//发送TCP数据报
-		udt_send(tcpPack);
+    /*构造函数*/
+    public TCP_Sender() {
+        super();    //调用超类构造函数
+        super.initTCP_Sender(this);        //初始化TCP发送端
+    }
 
-        // 3. 启动定时器（3秒超时）
-        if (timer != null) {
-            timer.cancel(); // 取消之前的定时器
-        }
-        timer = new UDT_Timer();
-        reTrans = new UDT_RetransTask(client, tcpPack);
-        timer.schedule(reTrans, 3000, 3000); // 每3秒重传一次
+    @Override
+    //可靠发送（应用层调用）：封装应用层数据，产生TCP数据报；需要修改
+    public void rdt_send(int dataIndex, int[] appData) {
+// 如果窗口已满，阻塞等待（简化处理：直接返回或 busy-wait）
 
-        waitACK();
-		seq = 1 - seq;
-		//等待ACK报文
-		//waitACK();
-//		while (flag==0);
-	}
-	
-	@Override
-	//不可靠发送：将打包好的TCP数据报通过不可靠传输信道发送；仅需修改错误标志
-	public void udt_send(TCP_PACKET stcpPack) {
-		//设置错误控制标志
-		tcpH.setTh_eflag((byte)4);
-		//System.out.println("to send: "+stcpPack.getTcpH().getTh_seq());				
-		//发送数据报
-		client.send(stcpPack);
-	}
-	
-	@Override
-	//需要修改
-	public void waitACK() {
-		//循环检查ackQueue
-		//循环检查确认号对列中是否有新收到的ACK
-
-        while (true){
+        while (nextseqnum >= base + WINDOW_SIZE) {
             try {
-                Integer ack = ackQueue.take(); // 阻塞等待 ACK
-
-                if (ack == null) continue;
-
-                // 只接受当前期望的 ACK
-                if (ack == seq) {
-                    System.out.println("ACK received for seq=" + seq);
-                    // 取消定时器
-                    if (timer != null) {
-                        timer.cancel();
-                        timer = null;
-                    }
-                    break; // 成功，退出循环
-                } else if (ack == 1-seq){
-                    // 收到的是旧 ACK（比如对上一个包的确认）
-                    System.out.println("Ignored old/duplicate ACK: " + ack);
-
-                    // 重置定时器（取消当前定时器，重新启动）
-                    if (timer != null) {
-                        timer.cancel();
-                    }
-                    timer = new UDT_Timer();
-                    reTrans = new UDT_RetransTask(client, tcpPack);
-                    timer.schedule(reTrans, 3000, 3000);
-
-                    udt_send(tcpPack);
-
-                    // 不重传！继续等正确的 ACK
-                }else {
-                    System.out.println("invalid ACK: " + ack);
-                    udt_send(tcpPack);
-                    // 重置定时器
-                    if (timer != null) {
-                        timer.cancel();
-                    }
-                    timer = new UDT_Timer();
-                    reTrans = new UDT_RetransTask(client, tcpPack);
-                    timer.schedule(reTrans, 3000, 3000);
-                }
-
+                Thread.sleep(10); // 简单等待
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 return;
             }
         }
-	}
+        tcpH = new TCP_HEADER(); // 或从模板克隆
+        tcpH.setTh_seq(nextseqnum);
 
-	@Override
-	//接收到ACK报文：检查校验和，将确认号插入ack队列;NACK的确认号为－1；不需要修改
-	public void recv(TCP_PACKET recvPack) {
-        // 先检查 ACK 报文本身的校验和！
+        tcpS = new TCP_SEGMENT();
+        tcpS.setData(appData);
+        tcpPack = new TCP_PACKET(tcpH, tcpS, destinAddr);
+        tcpH.setTh_sum(CheckSum.computeChkSum(tcpPack));
+
+        // 发送
+        udt_send(tcpPack);
+
+        // 缓存已发送单位确认的包
+        sndBuf.put(nextseqnum, tcpPack);
+
+        // 启动独立定时器
+        startTimer(nextseqnum, tcpPack);
+
+        nextseqnum = (nextseqnum + 1) % MAX_SEQ;
+
+        // 注意：不再调用 waitACK() —— ACK 处理在后台线程中进行
+    }
+
+    private void startTimer(int seq, TCP_PACKET packet) {
+        System.out.println("在启动前取消了seq=" + seq + "的定时器");
+        System.out.println("启动了seq=" + seq + "的定时器");
+        cancelTimer(seq); // 先取消旧的（防重复）
+        UDT_Timer timer = new UDT_Timer();
+        UDT_RetransTask task = new UDT_RetransTask(client, packet);
+        timer.schedule(task, 200, 200); // 只执行一次（SR 通常单次超时重传）
+
+        timers.put(seq, timer);
+        retransTasks.put(seq, task);
+    }
+
+    private void cancelTimer(int seq) {
+        UDT_Timer timer = timers.remove(seq);
+        if (timer != null) {
+            timer.cancel();
+        }
+        retransTasks.remove(seq);
+    }
+
+    @Override
+    //不可靠发送：将打包好的TCP数据报通过不可靠传输信道发送；仅需修改错误标志
+    public void udt_send(TCP_PACKET stcpPack) {
+        //设置错误控制标志
+        tcpH.setTh_eflag((byte) 4);
+        System.out.println("发送方发送了 " + stcpPack.getTcpH().getTh_seq() + "的包");
+        //发送数据报
+        client.send(stcpPack);
+    }
+
+    @Override
+    //需要修改
+    public void waitACK() {
+        // 检查是否在 [base, base + WINDOW_SIZE) 范围内（模运算）
+        if (isInWindow(ackNum, base, WINDOW_SIZE)) {
+            System.out.println("在窗口中，现在窗口大小是从" + base + "到" + (base + WINDOW_SIZE) % 8);
+            // 取消该分组的定时器
+            cancelTimer(ackNum);
+            System.out.println("在waitAck中取消" + ackNum + "的定时器");
+            // 标记为已确认（从缓存移除）
+            if (sndBuf.remove(ackNum) == null) {
+                System.out.println("该序号的包已确认，却还在尝试移除");
+            } else {
+                System.out.println("该序号的包第一次确认");
+            }
+
+            // 如果是 base，尝试滑动窗口
+            if (ackNum == base) {
+                // 向右滑动窗口：找到最小的未确认序号
+                int newBase = base;
+                // 即到达发送了但未确认的第一个包
+                while (!sndBuf.containsKey(newBase)) {
+                    newBase = (newBase + 1) % MAX_SEQ;
+                    if (newBase == nextseqnum) break; // 全部确认
+                }
+                base = newBase;
+                System.out.println("Window slid: base = " + base);
+                System.out.println();
+            } else {
+                System.out.println("Not base, no sliding.");
+            }
+        } else {
+            System.out.println("Out-of-window ACK: " + ackNum);
+            System.out.println();
+        }
+    }
+
+    @Override
+    //接收到ACK报文：检查校验和，将确认号插入ack队列;NACK的确认号为－1；不需要修改
+    public void recv(TCP_PACKET recvPack) {
+        // 校验 ACK 包
         if (CheckSum.computeChkSum(recvPack) != recvPack.getTcpH().getTh_sum()) {
-            // ACK 报文损坏，直接丢弃（不入队）
-            System.out.println("ACK packet corrupted! Discarded.");
+            System.out.println("Corrupted ACK! Discarded.");
             return;
         }
 
-        int ackNum = recvPack.getTcpH().getTh_ack();
+        ackNum = recvPack.getTcpH().getTh_ack();
+        System.out.println("Received ACK for seq=" + ackNum);
 
-		System.out.println("Receive ACK Number： "+ recvPack.getTcpH().getTh_ack());
-		ackQueue.add(ackNum);
-	    System.out.println();	
-	   
-	    //处理ACK报文
-//	    waitACK();
-	   
-	}
-	
+
+        // 直接处理 ACK（更高效）
+        waitACK();
+    }
+
+    // 判断 seq 是否在 [start, start + size) 环形窗口内
+    private boolean isInWindow(int seq, int start, int size) {
+        // 第一个条件不可能达成
+        if (size >= MAX_SEQ) return true;
+
+        if (start + size <= MAX_SEQ) {
+            // 例如start=1，seq=4，size=4
+            // 那么4>=1&&4<1+4
+            return seq >= start && seq < start + size;
+        } else {
+            // 环绕情况
+            return seq >= start || seq < (start + size) % MAX_SEQ;
+        }
+    }
+
 }

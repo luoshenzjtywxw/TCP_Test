@@ -15,9 +15,15 @@ import com.ouc.tcp.message.*;
 import com.ouc.tcp.tool.TCP_TOOL;
 
 public class TCP_Receiver extends TCP_Receiver_ADT {
-	
-	private TCP_PACKET ackPack;	//回复的ACK报文段
-	int sequence=0;//用于记录当前待接收的包序号，注意包序号不完全是
+    private static final int WINDOW_SIZE = 4;
+    private static final int MAX_SEQ = 8;
+
+    private int expectedSeq = 0; // 期望的下一个按序包
+    // 缓存：记录哪些序号已收到（true/false）
+    private final boolean[] received = new boolean[MAX_SEQ];
+    // 数据缓存
+    private final int[][] dataBuf = new int[MAX_SEQ][];
+
     private final BlockingQueue<int[]> dataQueue = new LinkedBlockingQueue<>();
 	/*构造函数*/
 	public TCP_Receiver() {
@@ -30,24 +36,32 @@ public class TCP_Receiver extends TCP_Receiver_ADT {
 	public void rdt_recv(TCP_PACKET recvPack) {
         int recvSeq = recvPack.getTcpH().getTh_seq();
         // 检查校验和
+        // 损害了就不管了，等着发送方超时
         if (CheckSum.computeChkSum(recvPack) != recvPack.getTcpH().getTh_sum()) {
-            // ❗ 包损坏 → 不发 NAK，而是重发上一次的 ACK（即 1 - sequence）
-            System.out.println("Packet corrupted! Sending duplicate ACK for seq=" + (1 - sequence));
-            sendAck(1 - sequence, recvPack.getSourceAddr());
+            // 发送最后一个按序确认的 ACK
+//            sendAck((expectedSeq - 1 + MAX_SEQ) % MAX_SEQ, recvPack.getSourceAddr());
             return;
         }
 
-        if (recvSeq == sequence) {
-            // 正确且按序
-            dataQueue.offer(recvPack.getTcpS().getData());
-            System.out.println("Deliver data with seq=" + recvSeq);
-            sendAck(sequence, recvPack.getSourceAddr());
-            sequence = 1 - sequence; // 切换期望序号
+        // 检查是否在接收窗口内 [expectedSeq, expectedSeq + WINDOW_SIZE)
+        if (isInWindow(recvSeq, expectedSeq, WINDOW_SIZE)) {
+            // 缓存数据（即使乱序）
+            // 这个好像是如果在窗口内的重复数据，就会覆盖，但没关系
+            dataBuf[recvSeq] = recvPack.getTcpS().getData();
+            // 标记为已收到
+            received[recvSeq] = true;
 
+            System.out.println("Cached packet with seq=" + recvSeq);
+
+            // 立即发送 ACK（无论是否按序）
+            sendAck(recvSeq, recvPack.getSourceAddr());
+
+            // 尝试交付连续数据
+            deliverInOrder();
         } else {
-            // 重复包（比如重传的旧包）
-            System.out.println("Duplicate packet (seq=" + recvSeq + "), sending duplicate ACK for seq=" + (1 - sequence));
-            sendAck(1 - sequence, recvPack.getSourceAddr());
+            // 包在窗口外，说明接收者收到了，但是发送确认出问题了，那么在确认下，不然发送者会一直重发
+            System.out.println("Out-of-window packet: " + recvSeq);
+            sendAck(recvSeq, recvPack.getSourceAddr()); // 或者发 expectedSeq-1?
         }
 
 		System.out.println();
@@ -57,7 +71,28 @@ public class TCP_Receiver extends TCP_Receiver_ADT {
 		if(dataQueue.size() == 20) 
 			deliver_data();	
 	}
+    private void deliverInOrder() {
+        while (received[expectedSeq]) {
+            // 提交数据
+            dataQueue.offer(dataBuf[expectedSeq]);
+            System.out.println("Delivered in-order data: seq=" + expectedSeq);
 
+            // 清空缓存
+            received[expectedSeq] = false;
+            dataBuf[expectedSeq] = null;
+
+            // 推进期望序号
+            expectedSeq = (expectedSeq + 1) % MAX_SEQ;
+        }
+    }
+    private boolean isInWindow(int seq, int start, int size) {
+        if (size >= MAX_SEQ) return true;
+        if (start + size <= MAX_SEQ) {
+            return seq >= start && seq < start + size;
+        } else {
+            return seq >= start || seq < (start + size) % MAX_SEQ;
+        }
+    }
 	@Override
 	//交付数据（将数据写入文件）；不需要修改
 	public void deliver_data() {
