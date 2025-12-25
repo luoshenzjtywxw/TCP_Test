@@ -16,7 +16,7 @@ import com.ouc.tcp.tool.TCP_TOOL;
 
 public class TCP_Receiver extends TCP_Receiver_ADT {
     private static final int WINDOW_SIZE = 4;
-    private static final int MAX_SEQ = 8;
+    private static final int MAX_SEQ = 100;
 
     private int expectedSeq = 0; // 期望的下一个按序包
     // 缓存：记录哪些序号已收到（true/false）
@@ -125,7 +125,7 @@ public class TCP_Receiver extends TCP_Receiver_ADT {
 	//回复ACK报文段
 	public void reply(TCP_PACKET replyPack) {
 		//设置错误控制标志
-		tcpH.setTh_eflag((byte)4);	//eFlag=0，信道无错误
+		tcpH.setTh_eflag((byte)7);	//eFlag=0，信道无错误
 				
 		//发送数据报
 		client.send(replyPack);
