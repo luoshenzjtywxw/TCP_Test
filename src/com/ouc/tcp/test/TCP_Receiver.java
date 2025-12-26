@@ -24,7 +24,7 @@ public class TCP_Receiver extends TCP_Receiver_ADT {
     // 使用 Map 替代固定数组：动态支持任意 seq
     private final Map<Integer, Boolean> received = new ConcurrentHashMap<>();
     private final Map<Integer, int[]> dataBuf = new ConcurrentHashMap<>();
-    // 一个线程内访问
+    // 一个线程内访问，同时也是线程安全的
     private final BlockingQueue<int[]> dataQueue = new LinkedBlockingQueue<>();
 
     /*构造函数*/
@@ -73,7 +73,7 @@ public class TCP_Receiver extends TCP_Receiver_ADT {
         System.out.println();
 
         // 每20组交付一次
-        if (dataQueue.size() == 20)
+        if (dataQueue.size() >= 20)
             deliver_data();
     }
 
@@ -125,7 +125,7 @@ public class TCP_Receiver extends TCP_Receiver_ADT {
 
     private void sendCumulativeAck(InetAddress destAddr) {
         int ackNum = ackSeq-1; // TCP 标准：ACK = 下一个期望序号
-        System.out.println("不正常发送确认值为"+ ackNum +"的ACK");
+        System.out.println("发送累积确认值为"+ ackNum +"的ACK");
 
         tcpH.setTh_ack(ackNum);
         TCP_PACKET ackPack = new TCP_PACKET(tcpH, tcpS, destAddr);

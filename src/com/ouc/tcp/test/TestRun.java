@@ -6,6 +6,7 @@ public class TestRun {
 	
 	public static void main(String[] args) throws InterruptedException {
 		SystemStart.main(null);
+        WindowLogger.close();
 	}
 	
 }

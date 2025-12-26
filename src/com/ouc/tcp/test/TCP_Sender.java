@@ -32,6 +32,7 @@ public class TCP_Sender extends TCP_Sender_ADT {
     public TCP_Sender() {
         super();
         super.initTCP_Sender(this);
+        WindowLogger.init(); // 👈 添加这一行
     }
 
     @Override
@@ -46,7 +47,8 @@ public class TCP_Sender extends TCP_Sender_ADT {
                 return;
             }
         }
-
+        // 👇 记录发送前的状态
+        WindowLogger.log(cwnd, ssthresh, sendBase, nextSeq, duplicateAcks, "Send seq=" + nextSeq);
         sendPacket(nextSeq, appData);
         System.out.println("应用层发送了序号为：" + nextSeq + "的包");
         nextSeq++;
@@ -81,7 +83,7 @@ public class TCP_Sender extends TCP_Sender_ADT {
         retransTask = new UDT_RetransTask(client, packet) {
             @Override
             public void run() {
-                super.run(); // 执行重传
+//                super.run(); // 执行重传
                 handleTimeout(); // 触发拥塞控制
             }
         };
@@ -153,12 +155,15 @@ public class TCP_Sender extends TCP_Sender_ADT {
                 }
                 System.out.println("拥塞避免: cwnd=" + cwnd);
             }
+            // ... after updating cwnd ...
+            WindowLogger.log(cwnd, ssthresh, sendBase, nextSeq, duplicateAcks, "New ACK=" + ack);
 
         } else if (ack == sendBase-1) {
             // === 重复 ACK ===
             duplicateAcks++;
 
             if (duplicateAcks == 3) {
+
                 // Fast Retransmit
                 System.out.println("收到三个重复ACK，快重传seq=" + sendBase);
                 TCP_PACKET lost = sndBuf.get(sendBase);
@@ -171,18 +176,25 @@ public class TCP_Sender extends TCP_Sender_ADT {
                 ssthresh = Math.max(cwnd / 2, 2);
                 cwnd = ssthresh + 3;
                 System.out.println("快恢复: ssthresh=" + ssthresh + ", cwnd=" + cwnd);
-
+                WindowLogger.log(cwnd, ssthresh, sendBase, nextSeq, duplicateAcks, "Fast Retransmit seq=" + sendBase);
             } else if (duplicateAcks > 3) {
                 // 在 Fast Recovery 中，每多一个 dup ACK，允许发送一个新包
                 cwnd += 1;
                 System.out.println("In Fast Recovery, extra dup ACK: cwnd=" + cwnd);
+                WindowLogger.log(cwnd, ssthresh, sendBase, nextSeq, duplicateAcks, "Extra dup ACK, cwnd+1");
             }
         }
         // ack < sendBase: 忽略（过期 ACK）
     }
-
+    // 超时了需要重新为超时的包设置定时器
     public void handleTimeout() {
+        WindowLogger.log(cwnd, ssthresh, sendBase, nextSeq, duplicateAcks, "Timeout retrans seq=" + sendBase);
         System.out.println("超时了!重传序号为 seq=" + sendBase + "的包");
+        TCP_PACKET lost = sndBuf.get(sendBase);
+        if (lost != null) {
+            udt_send(lost);      // ← 自己重传
+            startTimer(lost);    // ← 重启定时器（关键！）
+        }
         duplicateAcks = 0;
 
         // 超时 → 慢启动
