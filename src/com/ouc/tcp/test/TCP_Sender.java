@@ -4,13 +4,8 @@ import com.ouc.tcp.client.TCP_Sender_ADT;
 import com.ouc.tcp.client.UDT_RetransTask;
 import com.ouc.tcp.client.UDT_Timer;
 import com.ouc.tcp.message.*;
-import com.ouc.tcp.test.CheckSum;
-
-import java.util.HashMap;
 import java.util.Map;
-import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.LinkedBlockingQueue;
 
 public class TCP_Sender extends TCP_Sender_ADT {
     // ===== 发送状态 =====
@@ -39,7 +34,7 @@ public class TCP_Sender extends TCP_Sender_ADT {
     public void rdt_send(int dataIndex, int[] appData) {
         // 阻塞直到窗口有空位（简单实现）
         while (nextSeq >= sendBase + cwnd) {
-            System.out.println("窗口满了，目前大小为：" + cwnd + ", 部分发送序号为（" + nextSeq + "）的包");
+//            System.out.println("窗口满了，目前大小为：" + cwnd + ", 部分发送序号为（" + nextSeq + "）的包");
             try {
                 Thread.sleep(10);
             } catch (InterruptedException e) {
