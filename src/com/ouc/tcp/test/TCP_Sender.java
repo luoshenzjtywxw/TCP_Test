@@ -117,7 +117,8 @@ public class TCP_Sender extends TCP_Sender_ADT {
     private void processAck(int ack) {
         if (ack >= sendBase) {
             // === 新 ACK（推进窗口）===
-            duplicateAcks = 0;
+            // 这里=1是为了快重传，因位这也算来了一次发送
+            duplicateAcks = 1;
 
             int oldBase = sendBase;
             // 这个不能改成sendBase = ack + 1;因为如果接受方没有收到包，发序号5所想要序号为5的包，你却直接把sendbase变成了6，那么你就不会传序号为5的包

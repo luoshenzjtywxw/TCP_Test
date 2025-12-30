@@ -35,7 +35,7 @@ public class TCP_Receiver extends TCP_Receiver_ADT {
 
     private long lastRecvTime = System.currentTimeMillis(); // 最后一次收到合法包的时间
     private UDT_Timer idleTimer = null;                    // 空闲检测定时器
-    private static final long IDLE_TIMEOUT = 500;          // 空闲超时阈值（500ms）
+    private static final long IDLE_TIMEOUT = 4000;          // 空闲超时阈值（500ms）
 
     /*构造函数*/
     public TCP_Receiver() {
@@ -178,7 +178,7 @@ public class TCP_Receiver extends TCP_Receiver_ADT {
         long now = System.currentTimeMillis();
         if (now - lastRecvTime >= IDLE_TIMEOUT) {
             // 确认空闲：停止所有定时器，完成最后交付
-            System.out.println("检测到 500ms 无新包，认为传输结束。");
+            System.out.println("检测到 4000ms 无新包，认为传输结束。");
 
             // 停止周期性 ACK 定时器
             if (timer != null) {
