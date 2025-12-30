@@ -68,7 +68,7 @@ public class TCP_Receiver extends TCP_Receiver_ADT {
 		
 		
 		//交付数据（每20组数据交付一次）
-		if(dataQueue.size() == 20) 
+//		if(dataQueue.size() == 20)
 			deliver_data();	
 	}
     private void deliverInOrder() {
