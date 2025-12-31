@@ -8,6 +8,7 @@ import java.io.FileWriter;
 import java.io.IOException;
 import java.net.InetAddress;
 import java.util.Map;
+import java.util.TimerTask;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.LinkedBlockingQueue;
@@ -19,23 +20,18 @@ import com.ouc.tcp.message.*;
 
 public class TCP_Receiver extends TCP_Receiver_ADT {
     private static final int WINDOW_SIZE = 500;
-
-    private int ackSeq = 0; // 期望的下一个按序包（自然增长，不取模）
-
+    private static final long DELAYED_ACK_TIMEOUT = 500; // 500ms
     // 使用 Map 替代固定数组：动态支持任意 seq
     private final Map<Integer, Boolean> received = new ConcurrentHashMap<>();
     private final Map<Integer, int[]> dataBuf = new ConcurrentHashMap<>();
     // 一个线程内访问，同时也是线程安全的
     private final BlockingQueue<int[]> dataQueue = new LinkedBlockingQueue<>();
+    private int ackSeq = 0; // 期望的下一个按序包（自然增长，不取模）
     // 超时定时器
-    private UDT_Timer timer = null;
+    private UDT_Timer delayedAckTimer = null;
     private UDT_RetransTask retransTask;
     private InetAddress sourceAddr;
     private TCP_PACKET ackPack;
-
-    private long lastRecvTime = System.currentTimeMillis(); // 最后一次收到合法包的时间
-    private UDT_Timer idleTimer = null;                    // 空闲检测定时器
-    private static final long IDLE_TIMEOUT = 4000;          // 空闲超时阈值（500ms）
 
     /*构造函数*/
     public TCP_Receiver() {
@@ -45,54 +41,60 @@ public class TCP_Receiver extends TCP_Receiver_ADT {
 
     @Override
     public void rdt_recv(TCP_PACKET recvPack) {
-        int recvSeq = recvPack.getTcpH().getTh_seq();
-        lastRecvTime = System.currentTimeMillis();
-        resetIdleTimer();
-
         // 检查校验和
         if (CheckSum.computeChkSum(recvPack) != recvPack.getTcpH().getTh_sum()) {
             System.out.println("Corrupted packet! Sending cumulative ACK anyway.");
             // 防止第一个包就是损坏的，那么不能回复，因为地址可能都是错的，只能等超时重发了
-            if(sourceAddr== null){
-                return;
-            }
-            // 损坏包也要发送累计确认
-            startTimerAndReply();
             return;
         }
         sourceAddr = recvPack.getSourceAddr();
-        startTimerNotReply();
+        int recvSeq = recvPack.getTcpH().getTh_seq();
+        int oldAckSeq = ackSeq;
+        // 2. 处理重复包（seq < ackSeq）
+        if (recvSeq < ackSeq) {
+            System.out.println("收到重复包: " + recvSeq + "，立即发送重复 ACK");
+            sendImmediateCumulativeAck();
+            return;
+        }
+        // 3. 检查是否在接收窗口内
+        if (!isInWindow(recvSeq, ackSeq, WINDOW_SIZE)) {
+            System.out.println("收到窗口外的包: " + recvSeq + "，立即发送当前累积 ACK");
+            sendImmediateCumulativeAck();
+            return;
+        }
         // 检查是否在接收窗口内 [expectedSeq, expectedSeq + WINDOW_SIZE)
-        if (isInWindow(recvSeq, ackSeq, WINDOW_SIZE)) {
-            // 缓存数据（即使乱序）
-            dataBuf.put(recvSeq, recvPack.getTcpS().getData());
-            received.put(recvSeq, true);
+        // 缓存数据（即使乱序）
+        // 4. 缓存数据
+        dataBuf.put(recvSeq, recvPack.getTcpS().getData());
+        received.put(recvSeq, true);
 
-            System.out.println("收到次序为=" + recvSeq+"的包");
-
-            // 先 deliver 再发 ACK（确保 ACK 反映最新状态）
-            // 比如收到了序号为5的包，然后发送的是5，期望变成了6，下一次收到序号为6的包，然后发送期望为6的ACK，而不是7，如果没收到序号为6的包，则发送的ACK为6，而不是5，因为代表了期望的包
-            // 接收者收到了这个6，就会接着发送6的包，并代表之前的已经确认了（因为之前没有确认，接收者的期望也不会变成6）
+        System.out.println("收到次序为=" + recvSeq + "的包");
+        // 5. 判断是窗口左沿（按序）还是乱序
+        if (recvSeq == oldAckSeq) {
+            // ✅ 收到窗口左沿包：尝试交付并调度延迟 ACK
+            // ack开始变化了
             deliverInOrder();
-            tcpH.setTh_ack(ackSeq-1);
+            ackPack = new TCP_PACKET(tcpH, tcpS, sourceAddr);
+            tcpH.setTh_ack(ackSeq - 1);
             tcpH.setTh_sum(CheckSum.computeChkSum(ackPack));
-            // 可能定时器取消了（说明已经很长时间没有收到包了，发送完了），但是又有包过来了（发送端的最后一个包超时重发），就需要正常回应
-            if(timer==null){
-                reply(ackPack);
+            if (ackSeq > oldAckSeq) {
+                System.out.println("窗口推进，启动定时器");
+                startTimer(); // 只有窗口推进才启动定时器
             }
         } else {
-
-            System.out.println("接收者收到在窗口外的包：" + recvSeq);
-            System.out.println("目前窗口位置为：("+ ackSeq +"-"+(ackSeq +WINDOW_SIZE)+")");
-            // 仍发送当前累积 ACK，这里也要发！
-            startTimerAndReply();
+            // ✅ 乱序包（如期望5，收到6/7/8...）：立即发送重复 ACK（触发快重传）
+            System.out.println("收到乱序包: " + recvSeq + "，立即发送重复 ACK");
+            sendImmediateCumulativeAck();
         }
-
+        // 先 deliver 再发 ACK（确保 ACK 反映最新状态）
+        // 比如收到了序号为5的包，然后发送的是5，期望变成了6，下一次收到序号为6的包，然后发送期望为6的ACK，而不是7，如果没收到序号为6的包，则发送的ACK为6，而不是5，因为代表了期望的包
+        // 接收者收到了这个6，就会接着发送6的包，并代表之前的已经确认了（因为之前没有确认，接收者的期望也不会变成6）
+        // 可能定时器取消了（说明已经很长时间没有收到包了，发送完了），但是又有包过来了（发送端的最后一个包超时重发），就需要正常回应
         System.out.println();
 
         // 每20组交付一次
-        if (dataQueue.size() >= 20)
-            deliver_data();
+//        if (dataQueue.size() >= 20)
+        deliver_data();
     }
 
     private void deliverInOrder() {
@@ -139,67 +141,57 @@ public class TCP_Receiver extends TCP_Receiver_ADT {
         tcpH.setTh_eflag((byte) 7); // 无错误
         client.send(replyPack);
     }
-    private void startTimerAndReply() {
-        if (timer != null) {
-            timer.cancel();
-        }
 
-        // 发送
+    // 立即发送当前累积 ACK（用于乱序包、重复包、窗口外包）
+    private void sendImmediateCumulativeAck() {
+
+        if (delayedAckTimer != null) {
+            delayedAckTimer.cancel();
+            delayedAckTimer = null;
+        }
+        sendCumulativeAck();
+    }
+
+    // 调度 500ms 延迟 ACK 定时器（用于累积确认）
+    private void startTimer() {
+        if (delayedAckTimer != null) {
+            delayedAckTimer.cancel();
+        }
+        delayedAckTimer = new UDT_Timer();
+        retransTask = new UDT_RetransTask(client, ackPack);
+        delayedAckTimer.schedule(retransTask, DELAYED_ACK_TIMEOUT);
+    }
+
+    // 实际构造并发送 ACK 包
+    private void sendCumulativeAck() {
+        if (sourceAddr == null) return;
+        ackPack = new TCP_PACKET(tcpH, tcpS, sourceAddr);
+        tcpH.setTh_sum(CheckSum.computeChkSum(ackPack));
         reply(ackPack);
-        timer = new UDT_Timer();
-        retransTask = new UDT_RetransTask(client, ackPack) ;
-        timer.schedule(retransTask, 500,500); // 一次性超时（Reno 通常单次）
+        System.out.println("发送累积 ACK: " + (ackSeq - 1));
     }
-    private void startTimerNotReply() {
-        if (timer == null) {
-            tcpH.setTh_ack(ackSeq - 1);
-            ackPack = new TCP_PACKET(tcpH, tcpS, sourceAddr);
-            tcpH.setTh_sum(CheckSum.computeChkSum(ackPack));
-            // 发送
-//        reply(tcpPack);
-            timer = new UDT_Timer();
-            retransTask = new UDT_RetransTask(client, ackPack);
-            timer.schedule(retransTask, 500, 500); // 一次性超时（Reno 通常单次）
-        }
-    }
-    private void resetIdleTimer() {
-        if (idleTimer != null) {
-            idleTimer.cancel();
-        }
-        idleTimer = new UDT_Timer();
-        idleTimer.schedule(new java.util.TimerTask() {
-            @Override
-            public void run() {
-                checkIdleTimeout();
-            }
-        }, IDLE_TIMEOUT); // 500ms 后检查
-    }
-    private void checkIdleTimeout() {
-        long now = System.currentTimeMillis();
-        if (now - lastRecvTime >= IDLE_TIMEOUT) {
-            // 确认空闲：停止所有定时器，完成最后交付
-            System.out.println("检测到 4000ms 无新包，认为传输结束。");
+//    private void startTimerAndReply() {
+//        if (timer != null) {
+//            timer.cancel();
+//        }
+//
+//        // 发送
+//        reply(ackPack);
+//        timer = new UDT_Timer();
+//        retransTask = new UDT_RetransTask(client, ackPack);
+//        timer.schedule(retransTask, 500, 500); // 一次性超时（Reno 通常单次）
+//    }
 
-            // 停止周期性 ACK 定时器
-            if (timer != null) {
-                timer.cancel();
-                timer = null;
-            }
-
-            // 停止空闲定时器（自己）
-            idleTimer.cancel();
-            idleTimer = null;
-
-            // 交付剩余数据（即使不足20）
-            deliver_data();
-
-            // 可选：通知客户端关闭？或设置标志位
-            // client.shutdown(); // 如果有此类接口
-
-        } else {
-            // 还没超时，可能是被提前触发（比如 reset 后旧 timer 还在）
-            // 安全起见，再设一次（或忽略）
-            resetIdleTimer(); // 或者不做任何事，因为 reset 已经覆盖
-        }
-    }
+//    private void startTimerNotReply() {
+//        if (timer == null) {
+//            tcpH.setTh_ack(ackSeq - 1);
+//            ackPack = new TCP_PACKET(tcpH, tcpS, sourceAddr);
+//            tcpH.setTh_sum(CheckSum.computeChkSum(ackPack));
+//            // 发送
+////        reply(tcpPack);
+//            timer = new UDT_Timer();
+//            retransTask = new UDT_RetransTask(client, ackPack);
+//            timer.schedule(retransTask, 500, 500); // 一次性超时（Reno 通常单次）
+//        }
+//    }
 }
