@@ -40,8 +40,14 @@ public class TCP_Sender extends TCP_Sender_ADT {
 		
 		//发送TCP数据报
 		udt_send(tcpPack);
-
-        // 3. 启动定时器（3秒超时）
+        startTimer();
+        waitACK();
+		seq = 1 - seq;
+		//等待ACK报文
+		//waitACK();
+//		while (flag==0);
+	}
+	public void startTimer(){
         if (timer != null) {
             timer.cancel(); // 取消之前的定时器
         }
@@ -49,13 +55,7 @@ public class TCP_Sender extends TCP_Sender_ADT {
         reTrans = new UDT_RetransTask(client, tcpPack);
         timer.schedule(reTrans, 3000, 3000); // 每3秒重传一次
 
-        waitACK();
-		seq = 1 - seq;
-		//等待ACK报文
-		//waitACK();
-//		while (flag==0);
-	}
-	
+    }
 	@Override
 	//不可靠发送：将打包好的TCP数据报通过不可靠传输信道发送；仅需修改错误标志
 	public void udt_send(TCP_PACKET stcpPack) {
@@ -75,9 +75,7 @@ public class TCP_Sender extends TCP_Sender_ADT {
         while (true){
             try {
                 Integer ack = ackQueue.take(); // 阻塞等待 ACK
-
                 if (ack == null) continue;
-
                 // 只接受当前期望的 ACK
                 if (ack == seq) {
                     System.out.println("ACK received for seq=" + seq);
@@ -90,30 +88,16 @@ public class TCP_Sender extends TCP_Sender_ADT {
                 } else if (ack == 1-seq){
                     // 收到的是旧 ACK（比如对上一个包的确认）
                     System.out.println("Ignored old/duplicate ACK: " + ack);
-
                     // 重置定时器（取消当前定时器，重新启动）
-                    if (timer != null) {
-                        timer.cancel();
-                    }
-                    timer = new UDT_Timer();
-                    reTrans = new UDT_RetransTask(client, tcpPack);
-                    timer.schedule(reTrans, 3000, 3000);
-
                     udt_send(tcpPack);
-
+                    startTimer();
                     // 不重传！继续等正确的 ACK
                 }else {
                     System.out.println("invalid ACK: " + ack);
                     udt_send(tcpPack);
                     // 重置定时器
-                    if (timer != null) {
-                        timer.cancel();
-                    }
-                    timer = new UDT_Timer();
-                    reTrans = new UDT_RetransTask(client, tcpPack);
-                    timer.schedule(reTrans, 3000, 3000);
+                    startTimer();
                 }
-
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 return;
