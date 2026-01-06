@@ -151,12 +151,11 @@ public class TCP_Receiver extends TCP_Receiver_ADT {
             timer.cancel();
         }
         timer = new UDT_Timer();
-        // 如果没有包，则创建下
         tcpH.setTh_ack(ackSeq-1);
         tcpH.setTh_sum(CheckSum.computeChkSum(ackPack));
         retransTask = new UDT_RetransTask(client, ackPack);
         timer.schedule(retransTask, 500); // 一次性超时（Reno 通常单次）
-//        System.out.println("Started timer for base seq=" + sendBase);
+        System.out.println("Started timer for base seq=" +( ackSeq-1));
     }
 
     private void stopTimer() {

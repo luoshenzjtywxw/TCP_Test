@@ -145,18 +145,18 @@ public class TCP_Sender extends TCP_Sender_ADT {
             // === 拥塞控制 ===
             // 只有在还有未确认数据时才更新 cwnd（避免传输结束后无效增长）
             if (cwnd < ssthresh) {
-                cwnd += 1;
+                cwnd=  cwnd + (sendBase - oldBase);
                 System.out.println("慢开始: cwnd=" + cwnd);
-            } else {
-                Rate += 1.0 / cwnd;
-                if (Rate >= 1.0) {
-                    cwnd += 1;
+            }else {
+                Rate += (double) (sendBase - oldBase)/ cwnd;
+                while (Rate >= 1.0) {
+                    cwnd++;
                     Rate -= 1.0;
                 }
                 System.out.println("拥塞避免: cwnd=" + cwnd);
             }
             // ... after updating cwnd ...
-            WindowLogger.log(cwnd, ssthresh, sendBase, nextSeq, duplicateAcks, "New ACK=" + ack);
+            WindowLogger.log(cwnd, ssthresh, sendBase, nextSeq, duplicateAcks, "Recieve ACK=" + ack);
 
         } else if (ack == sendBase-1) {
             // === 重复 ACK ===
