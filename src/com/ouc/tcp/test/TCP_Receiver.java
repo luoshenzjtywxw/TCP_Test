@@ -136,8 +136,8 @@ public class TCP_Receiver extends TCP_Receiver_ADT {
     private void sendCumulativeAck() {
         int ackNum = ackSeq - 1;
         System.out.println("发送累积确认值为" + ackNum + "的ACK");
+//        TCP_PACKET ackPack = new TCP_PACKET(tcpH, tcpS, destAddr);
         tcpH.setTh_ack(ackNum);
-        TCP_PACKET ackPack = new TCP_PACKET(tcpH, tcpS, destAddr);
         tcpH.setTh_sum(CheckSum.computeChkSum(ackPack));
         reply(ackPack);
     }
