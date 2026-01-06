@@ -32,7 +32,6 @@ public class TCP_Receiver extends TCP_Receiver_ADT {
     private UDT_RetransTask retransTask = null;
     private InetAddress destAddr = null;
     private TCP_PACKET ackPack = new TCP_PACKET(tcpH, tcpS, destAddr);
-    ;
 
     /*构造函数*/
     public TCP_Receiver() {

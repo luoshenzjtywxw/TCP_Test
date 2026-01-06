@@ -24,9 +24,10 @@ public class CheckSum {
 
     public static short computeChkSum(TCP_PACKET tcpPack) {
         int sum = 0;
-
+        if(tcpPack==null){
+            System.out.println("tcpPack is null");
+        }
         TCP_HEADER header = tcpPack.getTcpH();
-        int[] data = tcpPack.getTcpS().getData();
 
         // 1. 加入 seq（32位 → 两个16位）
         sum = add32AsTwo16(sum, header.getTh_seq());
@@ -35,7 +36,10 @@ public class CheckSum {
         sum = add32AsTwo16(sum, header.getTh_ack());
 
         // 3. 校验和字段本身设为0，所以跳过（不加）
-
+        int[] data=null;
+        if(tcpPack.getTcpS().getData()!=null){
+            data = tcpPack.getTcpS().getData();
+        }
         // 4. 加入数据部分（每个int视为4字节，按16位字处理）
         if (data != null) {
             for (int value : data) {
