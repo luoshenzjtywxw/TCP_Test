@@ -42,7 +42,6 @@ public class TCP_Receiver extends TCP_Receiver_ADT {
 
     @Override
     public void rdt_recv(TCP_PACKET recvPack) {
-        int recvSeq = recvPack.getTcpH().getTh_seq();
 
         // 检查校验和
         if (CheckSum.computeChkSum(recvPack) != recvPack.getTcpH().getTh_sum()) {
@@ -51,6 +50,7 @@ public class TCP_Receiver extends TCP_Receiver_ADT {
 //            sendCumulativeAck(recvPack.getSourceAddr());
             return;
         }
+        int recvSeq = recvPack.getTcpH().getTh_seq();
         destAddr = recvPack.getSourceAddr();
         // 检查是否在接收窗口内 [expectedSeq, expectedSeq + WINDOW_SIZE)
         if (isInWindow(recvSeq, ackSeq, WINDOW_SIZE)) {
@@ -67,23 +67,25 @@ public class TCP_Receiver extends TCP_Receiver_ADT {
                 deliverInOrder();
                 startTimer();
                 // 开启定时器
+            } else {
+                // 不是所期望的，就会立即发送累计确认
+                stopTimer();
+                sendCumulativeAck();
             }
-
-            sendCumulativeAck(destAddr);
-
         } else {
 
             System.out.println("接收者收到在窗口外的包：" + recvSeq);
             System.out.println("目前窗口位置为：(" + ackSeq + "-" + (ackSeq + WINDOW_SIZE) + ")");
+            stopTimer();
             // 仍发送当前累积 ACK，这里也要发！
-            sendCumulativeAck(destAddr);
+            sendCumulativeAck();
         }
 
         System.out.println();
 
         // 每20组交付一次
-        if (dataQueue.size() >= 20)
-            deliver_data();
+//        if (dataQueue.size() >= 20)
+        deliver_data();
     }
 
     private void deliverInOrder() {
@@ -132,10 +134,9 @@ public class TCP_Receiver extends TCP_Receiver_ADT {
     }
 
 
-    private void sendCumulativeAck(InetAddress destAddr) {
+    private void sendCumulativeAck() {
         int ackNum = ackSeq - 1;
         System.out.println("发送累积确认值为" + ackNum + "的ACK");
-
         tcpH.setTh_ack(ackNum);
         TCP_PACKET ackPack = new TCP_PACKET(tcpH, tcpS, destAddr);
         tcpH.setTh_sum(CheckSum.computeChkSum(ackPack));
@@ -153,5 +154,12 @@ public class TCP_Receiver extends TCP_Receiver_ADT {
         retransTask = new UDT_RetransTask(client, ackPack);
         timer.schedule(retransTask, 500); // 一次性超时（Reno 通常单次）
 //        System.out.println("Started timer for base seq=" + sendBase);
+    }
+
+    private void stopTimer() {
+        if (timer != null) {
+            timer.cancel();
+            timer = null;
+        }
     }
 }
