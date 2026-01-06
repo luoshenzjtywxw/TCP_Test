@@ -31,7 +31,7 @@ public class TCP_Receiver extends TCP_Receiver_ADT {
     private UDT_Timer timer = null;
     private UDT_RetransTask retransTask = null;
     private InetAddress destAddr = null;
-    private TCP_PACKET ackPack = new TCP_PACKET(tcpH, tcpS, destAddr);
+    private TCP_PACKET ackPack  = null;
 
     /*构造函数*/
     public TCP_Receiver() {
@@ -49,8 +49,12 @@ public class TCP_Receiver extends TCP_Receiver_ADT {
 //            sendCumulativeAck(recvPack.getSourceAddr());
             return;
         }
-        int recvSeq = recvPack.getTcpH().getTh_seq();
         destAddr = recvPack.getSourceAddr();
+        int recvSeq = recvPack.getTcpH().getTh_seq();
+
+        if (ackPack==null){
+            ackPack = new TCP_PACKET(tcpH, tcpS, destAddr);
+        }
         // 检查是否在接收窗口内 [expectedSeq, expectedSeq + WINDOW_SIZE)
         if (isInWindow(recvSeq, ackSeq, WINDOW_SIZE)) {
             // 缓存数据（即使乱序）
@@ -148,7 +152,7 @@ public class TCP_Receiver extends TCP_Receiver_ADT {
         }
         timer = new UDT_Timer();
         // 如果没有包，则创建下
-        tcpH.setTh_ack(ackSeq);
+        tcpH.setTh_ack(ackSeq-1);
         tcpH.setTh_sum(CheckSum.computeChkSum(ackPack));
         retransTask = new UDT_RetransTask(client, ackPack);
         timer.schedule(retransTask, 500); // 一次性超时（Reno 通常单次）
