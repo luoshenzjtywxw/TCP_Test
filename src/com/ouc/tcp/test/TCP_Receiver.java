@@ -7,6 +7,7 @@ import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.net.InetAddress;
+import java.net.SocketAddress;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.BlockingQueue;
@@ -14,6 +15,8 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.LinkedBlockingQueue;
 
 import com.ouc.tcp.client.TCP_Receiver_ADT;
+import com.ouc.tcp.client.UDT_RetransTask;
+import com.ouc.tcp.client.UDT_Timer;
 import com.ouc.tcp.message.*;
 
 public class TCP_Receiver extends TCP_Receiver_ADT {
@@ -26,7 +29,10 @@ public class TCP_Receiver extends TCP_Receiver_ADT {
     private final Map<Integer, int[]> dataBuf = new ConcurrentHashMap<>();
     // 一个线程内访问，同时也是线程安全的
     private final BlockingQueue<int[]> dataQueue = new LinkedBlockingQueue<>();
-
+    // 超时定时器（只对 sendBase 包计时）
+    private UDT_Timer timer = null;
+    private UDT_RetransTask retransTask = null;
+    private TCP_PACKET ackPack = null;
     /*构造函数*/
     public TCP_Receiver() {
         super();
@@ -41,7 +47,7 @@ public class TCP_Receiver extends TCP_Receiver_ADT {
         if (CheckSum.computeChkSum(recvPack) != recvPack.getTcpH().getTh_sum()) {
             System.out.println("Corrupted packet! Sending cumulative ACK anyway.");
             // 损坏包也要发送累计确认
-            sendCumulativeAck(recvPack.getSourceAddr());
+//            sendCumulativeAck(recvPack.getSourceAddr());
             return;
         }
 
@@ -56,7 +62,11 @@ public class TCP_Receiver extends TCP_Receiver_ADT {
             // 先 deliver 再发 ACK（确保 ACK 反映最新状态）
             // 比如收到了序号为5的包，然后发送的是5，期望变成了6，下一次收到序号为6的包，然后发送期望为6的ACK，而不是7，如果没收到序号为6的包，则发送的ACK为6，而不是5，因为代表了期望的包
             // 接收者收到了这个6，就会接着发送6的包，并代表之前的已经确认了（因为之前没有确认，接收者的期望也不会变成6）
-            deliverInOrder();
+            if(recvSeq == ackSeq){
+                deliverInOrder();
+                // 开启定时器
+
+            }
 
             sendCumulativeAck(recvPack.getSourceAddr());
 
@@ -131,5 +141,18 @@ public class TCP_Receiver extends TCP_Receiver_ADT {
         TCP_PACKET ackPack = new TCP_PACKET(tcpH, tcpS, destAddr);
         tcpH.setTh_sum(CheckSum.computeChkSum(ackPack));
         reply(ackPack);
+    }
+    private void startTimer() {
+        if (timer != null) {
+            timer.cancel();
+        }
+        timer = new UDT_Timer();
+        // 更新一下包：
+        if(ackPack == null){
+            ackPack = new TCP_PACKET(tcpH, tcpS);
+        }
+        retransTask = new UDT_RetransTask(client, ackPack);
+        timer.schedule(retransTask, 3000); // 一次性超时（Reno 通常单次）
+        System.out.println("Started timer for base seq=" + sendBase);
     }
 }
