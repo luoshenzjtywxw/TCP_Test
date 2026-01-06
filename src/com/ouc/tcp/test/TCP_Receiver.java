@@ -21,18 +21,19 @@ import com.ouc.tcp.message.*;
 
 public class TCP_Receiver extends TCP_Receiver_ADT {
     private static final int WINDOW_SIZE = 500;
-
-    private int ackSeq = 0; // 期望的下一个按序包（自然增长，不取模）
-
     // 使用 Map 替代固定数组：动态支持任意 seq
     private final Map<Integer, Boolean> received = new ConcurrentHashMap<>();
     private final Map<Integer, int[]> dataBuf = new ConcurrentHashMap<>();
     // 一个线程内访问，同时也是线程安全的
     private final BlockingQueue<int[]> dataQueue = new LinkedBlockingQueue<>();
+    private int ackSeq = 0; // 期望的下一个按序包（自然增长，不取模）
     // 超时定时器（只对 sendBase 包计时）
     private UDT_Timer timer = null;
     private UDT_RetransTask retransTask = null;
-    private TCP_PACKET ackPack = null;
+    private InetAddress destAddr = null;
+    private TCP_PACKET ackPack = new TCP_PACKET(tcpH, tcpS, destAddr);
+    ;
+
     /*构造函数*/
     public TCP_Receiver() {
         super();
@@ -50,34 +51,32 @@ public class TCP_Receiver extends TCP_Receiver_ADT {
 //            sendCumulativeAck(recvPack.getSourceAddr());
             return;
         }
-
+        destAddr = recvPack.getSourceAddr();
         // 检查是否在接收窗口内 [expectedSeq, expectedSeq + WINDOW_SIZE)
         if (isInWindow(recvSeq, ackSeq, WINDOW_SIZE)) {
             // 缓存数据（即使乱序）
             dataBuf.put(recvSeq, recvPack.getTcpS().getData());
             received.put(recvSeq, true);
 
-            System.out.println("收到次序为=" + recvSeq+"的包");
+            System.out.println("收到次序为=" + recvSeq + "的包");
 
             // 先 deliver 再发 ACK（确保 ACK 反映最新状态）
             // 比如收到了序号为5的包，然后发送的是5，期望变成了6，下一次收到序号为6的包，然后发送期望为6的ACK，而不是7，如果没收到序号为6的包，则发送的ACK为6，而不是5，因为代表了期望的包
             // 接收者收到了这个6，就会接着发送6的包，并代表之前的已经确认了（因为之前没有确认，接收者的期望也不会变成6）
-            if(recvSeq == ackSeq){
+            if (recvSeq == ackSeq) {
                 deliverInOrder();
+                startTimer();
                 // 开启定时器
-
             }
 
-            sendCumulativeAck(recvPack.getSourceAddr());
-
-
+            sendCumulativeAck(destAddr);
 
         } else {
 
             System.out.println("接收者收到在窗口外的包：" + recvSeq);
-            System.out.println("目前窗口位置为：("+ ackSeq +"-"+(ackSeq +WINDOW_SIZE)+")");
+            System.out.println("目前窗口位置为：(" + ackSeq + "-" + (ackSeq + WINDOW_SIZE) + ")");
             // 仍发送当前累积 ACK，这里也要发！
-            sendCumulativeAck(recvPack.getSourceAddr());
+            sendCumulativeAck(destAddr);
         }
 
         System.out.println();
@@ -134,25 +133,25 @@ public class TCP_Receiver extends TCP_Receiver_ADT {
 
 
     private void sendCumulativeAck(InetAddress destAddr) {
-        int ackNum = ackSeq-1; // TCP 标准：ACK = 下一个期望序号
-        System.out.println("发送累积确认值为"+ ackNum +"的ACK");
+        int ackNum = ackSeq - 1;
+        System.out.println("发送累积确认值为" + ackNum + "的ACK");
 
         tcpH.setTh_ack(ackNum);
         TCP_PACKET ackPack = new TCP_PACKET(tcpH, tcpS, destAddr);
         tcpH.setTh_sum(CheckSum.computeChkSum(ackPack));
         reply(ackPack);
     }
+
     private void startTimer() {
         if (timer != null) {
             timer.cancel();
         }
         timer = new UDT_Timer();
-        // 更新一下包：
-        if(ackPack == null){
-            ackPack = new TCP_PACKET(tcpH, tcpS);
-        }
+        // 如果没有包，则创建下
+        tcpH.setTh_ack(ackSeq);
+        tcpH.setTh_sum(CheckSum.computeChkSum(ackPack));
         retransTask = new UDT_RetransTask(client, ackPack);
-        timer.schedule(retransTask, 3000); // 一次性超时（Reno 通常单次）
-        System.out.println("Started timer for base seq=" + sendBase);
+        timer.schedule(retransTask, 500); // 一次性超时（Reno 通常单次）
+//        System.out.println("Started timer for base seq=" + sendBase);
     }
 }
