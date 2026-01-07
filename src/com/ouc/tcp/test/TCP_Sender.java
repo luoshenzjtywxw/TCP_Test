@@ -141,14 +141,25 @@ public class TCP_Sender extends TCP_Sender_ADT {
                 System.out.println("在处理ACK中为序号为：" + sendBase + "的包启动定时器");
                 startTimer(sndBuf.get(sendBase));
             }
-
+            int delayAck = sendBase - oldBase;
             // === 拥塞控制 ===
             // 只有在还有未确认数据时才更新 cwnd（避免传输结束后无效增长）
             if (cwnd < ssthresh) {
-                cwnd=  cwnd + (sendBase - oldBase);
+                int remainAck = cwnd + delayAck - ssthresh;
+                if(remainAck>0){
+                    cwnd = ssthresh;
+                    // 要开始拥塞避免了
+                    Rate += (double) (remainAck)/ cwnd;
+                    while (Rate >= 1.0) {
+                        cwnd++;
+                        Rate -= 1.0;
+                    }
+                }else {
+                    cwnd=  cwnd + delayAck;
+                }
                 System.out.println("慢开始: cwnd=" + cwnd);
             }else {
-                Rate += (double) (sendBase - oldBase)/ cwnd;
+                Rate += (double) (delayAck)/ cwnd;
                 while (Rate >= 1.0) {
                     cwnd++;
                     Rate -= 1.0;
@@ -188,7 +199,6 @@ public class TCP_Sender extends TCP_Sender_ADT {
     }
     // 超时了需要重新为超时的包设置定时器
     public void handleTimeout() {
-        WindowLogger.log(cwnd, ssthresh, sendBase, nextSeq, duplicateAcks, "Timeout retrans seq=" + sendBase);
         System.out.println("超时了!重传序号为 seq=" + sendBase + "的包");
         TCP_PACKET lost = sndBuf.get(sendBase);
         if (lost != null) {
@@ -200,7 +210,7 @@ public class TCP_Sender extends TCP_Sender_ADT {
         // 超时 → 慢启动
         ssthresh = Math.max(cwnd / 2, 2);
         cwnd = 1;
-
+        WindowLogger.log(cwnd, ssthresh, sendBase, nextSeq, duplicateAcks, "Timeout retrans seq=" + sendBase);
         // 重传由 UDT_RetransTask 完成，这里只更新状态
 //        System.out.println("After timeout: ssthresh=" + ssthresh + ", cwnd=" + cwnd);
     }
