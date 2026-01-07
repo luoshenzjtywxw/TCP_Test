@@ -19,11 +19,11 @@ public class TCP_Sender extends TCP_Sender_ADT {
     private double Rate = 0.0;
     // ===== Reno 拥塞控制参数 =====
     private int cwnd = 1;               // 拥塞窗口（包数）
-    private int ssthresh = 65535;       // 慢启动阈值
+    private int ssthresh = 32;       // 慢启动阈值
     private int duplicateAcks = 0;      // 重复 ACK 计数
     private int nextSeq = 0;            // 下一个要发送的序号（自然递增）
     private int sendBase = 0;           // 最早未确认的序号（累积 ACK 基准）
-
+    private boolean flag = false ;
     // 超时定时器（只对 sendBase 包计时）
     private UDT_Timer timer = null;
     private UDT_RetransTask retransTask = null;
@@ -142,6 +142,10 @@ public class TCP_Sender extends TCP_Sender_ADT {
                 startTimer(sndBuf.get(sendBase));
             }
             int delayAck = sendBase - oldBase;
+            if(flag){
+                flag = false;
+                delayAck = 1;
+            }
             // === 拥塞控制 ===
             // 只有在还有未确认数据时才更新 cwnd（避免传输结束后无效增长）
             if (cwnd < ssthresh) {
@@ -206,7 +210,7 @@ public class TCP_Sender extends TCP_Sender_ADT {
             startTimer(lost);    // ← 重启定时器（关键！）
         }
         duplicateAcks = 0;
-
+        flag = true;
         // 超时 → 慢启动
         ssthresh = Math.max(cwnd / 2, 2);
         cwnd = 1;
